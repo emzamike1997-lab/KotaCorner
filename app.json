@@ -1,0 +1,44 @@
+{
+  "expo": {
+    "name": "Kota Corner",
+    "slug": "kota-corner",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "jsEngine": "hermes",
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.kotacorner.app"
+    },
+    "android": {
+      "package": "com.kotacorner.app",
+      "permissions": [
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.READ_MEDIA_VISUAL_USER_SELECTED",
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.READ_MEDIA_VIDEO",
+        "android.permission.READ_MEDIA_AUDIO",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS"
+      ]
+    },
+    "plugins": [
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "Allow Kota Corner to save receipts to your gallery.",
+          "savePhotosPermission": "Allow Kota Corner to save receipts to your gallery.",
+          "isAccessMediaLocationEnabled": false
+        }
+      ],
+      "expo-audio"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "3f5f06e1-785a-4ecc-8c17-70fae12d6ca7"
+      }
+    },
+    "owner": "emzathecreator"
+  }
+}
