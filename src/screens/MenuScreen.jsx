@@ -134,7 +134,7 @@ const styles = StyleSheet.create({
   list:             { paddingBottom: 8 },
   sectionLabel:     { paddingHorizontal: 20, paddingTop: 12, paddingBottom: 6 },
   sectionText:      { color: COLORS.accent, fontSize: 11, fontWeight: '700', letterSpacing: 1.5 },
-  footer:           { backgroundColor: COLORS.bgDeep, borderTopWidth: 1, borderTopColor: COLORS.bgCard, padding: 16, paddingBottom: 12, gap: 10 },
+  footer:           { backgroundColor: COLORS.bgDeep, borderTopWidth: 1, borderTopColor: COLORS.bgCard, padding: 16, paddingBottom: 40, gap: 10 },
   totalRow:         { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end' },
   totalLabel:       { color: COLORS.muted, fontSize: 11, letterSpacing: 1, fontWeight: '600' },
   totalAmount:      { color: COLORS.yellow, fontSize: 28, fontWeight: '800', lineHeight: 32 },
