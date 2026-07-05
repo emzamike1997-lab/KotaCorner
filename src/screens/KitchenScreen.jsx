@@ -14,24 +14,30 @@ import { usePriceStore } from '../store/priceStore';
 const KITCHEN_PIN = '250397';
 
 const STATUS_META = {
-  pending: { label: 'NEW',       color: '#4caf50', bg: '#0d2a0d' },
-  making:  { label: 'MAKING',    color: '#F5C842', bg: '#2d2300' },
-  ready:   { label: 'READY',     color: '#E8500A', bg: '#3a1208' },
-  done:    { label: 'COLLECTED', color: COLORS.muted, bg: COLORS.bgCard },
+  awaiting_payment: { label: 'AWAITING PAYMENT', color: '#F5C842', bg: '#2d2300' },
+  paid: { label: 'PAID', color: '#4caf50', bg: '#0d2a0d' },
+  making: { label: 'PREPARING', color: '#F5C842', bg: '#2d2300' },
+  ready: { label: 'READY', color: '#E8500A', bg: '#3a1208' },
+  done: { label: 'COLLECTED', color: COLORS.muted, bg: COLORS.bgCard },
+  expired: { label: 'EXPIRED', color: '#cc3333', bg: '#2a0d0d' },
 };
 
 const ACTION_LABEL = {
-  pending: 'Start Making',
-  making:  'Mark Ready',
-  ready:   'Collected ✓',
-  done:    null,
+  awaiting_payment: 'Confirm Payment',
+  paid: 'Start Preparing',
+  making: 'Mark Ready',
+  ready: 'Collected ✓',
+  done: null,
+  expired: null,
 };
 
 const ACTION_COLOR = {
-  pending: '#4caf50',
-  making:  '#F5C842',
-  ready:   '#E8500A',
-  done:    null,
+  awaiting_payment: '#F5C842',
+  paid: '#4caf50',
+  making: '#F5C842',
+  ready: '#E8500A',
+  done: null,
+  expired: null,
 };
 
 // ─── Daily Summary ────────────────────────────────────────────
@@ -258,7 +264,7 @@ function KitchenOrderCard({ order, onAdvance }) {
   const flash = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
-    if (order.status !== 'pending') return;
+    if (order.status !== 'paid') return;
     const anim = Animated.loop(
       Animated.sequence([
         Animated.timing(flash, { toValue: 0.3, duration: 600, useNativeDriver: true }),
@@ -275,7 +281,7 @@ function KitchenOrderCard({ order, onAdvance }) {
         <View style={styles.orderIdRow}>
           <Animated.View style={[
             styles.statusDot,
-            { backgroundColor: meta.color, opacity: order.status === 'pending' ? flash : 1 }
+            { backgroundColor: meta.color, opacity: order.status === 'paid' ? flash : 1 }
           ]} />
           <Text style={styles.orderId}>{order.orderNumber}</Text>
         </View>
@@ -319,9 +325,10 @@ export default function KitchenScreen() {
   const [showPinPrompt, setShowPinPrompt] = useState(false);
   const [showPriceEditor, setShowPriceEditor] = useState(false);
 
-  const newCount    = kitchenOrders.filter(o => o.status === 'pending').length;
-  const makingCount = kitchenOrders.filter(o => o.status === 'making').length;
-  const readyCount  = kitchenOrders.filter(o => o.status === 'ready').length;
+  const paidOrders = kitchenOrders.filter(o => o.status === 'paid');
+  const preparingOrders = kitchenOrders.filter(o => o.status === 'making');
+  const readyOrders = kitchenOrders.filter(o => o.status === 'ready');
+  const hiddenPendingOrders = kitchenOrders.filter(o => o.status === 'awaiting_payment' || o.status === 'expired');
 
   const renderItem = useCallback(({ item }) => (
     <KitchenOrderCard order={item} onAdvance={advanceOrder} />
@@ -337,10 +344,15 @@ export default function KitchenScreen() {
         onClearDone={clearDoneOrders}
       />
       <View style={styles.statsRow}>
-        {newCount > 0    && <View style={[styles.statChip, { backgroundColor: '#0d2a0d' }]}><Text style={[styles.statText, { color: '#4caf50' }]}>NEW: {newCount}</Text></View>}
-        {makingCount > 0 && <View style={[styles.statChip, { backgroundColor: '#2d2300' }]}><Text style={[styles.statText, { color: '#F5C842' }]}>MAKING: {makingCount}</Text></View>}
-        {readyCount > 0  && <View style={[styles.statChip, { backgroundColor: '#3a1208' }]}><Text style={[styles.statText, { color: '#E8500A' }]}>READY: {readyCount}</Text></View>}
+        {paidOrders.length > 0 && <View style={[styles.statChip, { backgroundColor: '#0d2a0d' }]}><Text style={[styles.statText, { color: '#4caf50' }]}>PAID: {paidOrders.length}</Text></View>}
+        {preparingOrders.length > 0 && <View style={[styles.statChip, { backgroundColor: '#2d2300' }]}><Text style={[styles.statText, { color: '#F5C842' }]}>PREPARING: {preparingOrders.length}</Text></View>}
+        {readyOrders.length > 0 && <View style={[styles.statChip, { backgroundColor: '#3a1208' }]}><Text style={[styles.statText, { color: '#E8500A' }]}>READY: {readyOrders.length}</Text></View>}
       </View>
+      {hiddenPendingOrders.length > 0 && (
+        <View style={styles.noticeBox}>
+          <Text style={styles.noticeText}>Awaiting-payment orders are hidden until payment is confirmed.</Text>
+        </View>
+      )}
     </View>
   );
 
@@ -356,7 +368,7 @@ export default function KitchenScreen() {
         </View>
       </View>
 
-      {kitchenOrders.length === 0 ? (
+      {kitchenOrders.filter(o => o.status === 'paid' || o.status === 'making' || o.status === 'ready').length === 0 ? (
         <ScrollView>
           <DailySummary
             orders={kitchenOrders}
@@ -365,13 +377,13 @@ export default function KitchenScreen() {
           />
           <View style={styles.empty}>
             <Text style={styles.emptyEmoji}>🍳</Text>
-            <Text style={styles.emptyText}>No orders yet</Text>
-            <Text style={styles.emptySub}>New orders will appear here instantly</Text>
+            <Text style={styles.emptyText}>No active orders yet</Text>
+            <Text style={styles.emptySub}>Paid orders will appear here when payment is confirmed</Text>
           </View>
         </ScrollView>
       ) : (
         <FlatList
-          data={kitchenOrders}
+          data={[...paidOrders, ...preparingOrders, ...readyOrders]}
           renderItem={renderItem}
           keyExtractor={keyExtractor}
           ListHeaderComponent={ListHeader}
@@ -415,6 +427,8 @@ const styles = StyleSheet.create({
   statsRow:       { flexDirection: 'row', gap: 8, paddingHorizontal: 12, paddingBottom: 4, flexWrap: 'wrap' },
   statChip:       { borderRadius: 20, paddingHorizontal: 12, paddingVertical: 5 },
   statText:       { fontSize: 11, fontWeight: '800', letterSpacing: 1 },
+  noticeBox:      { backgroundColor: '#2d2300', marginHorizontal: 12, marginBottom: 8, borderRadius: 10, padding: 10, borderWidth: 1, borderColor: '#5c4300' },
+  noticeText:     { color: '#F5C842', fontSize: 11, fontWeight: '700' },
 
   list:           { paddingHorizontal: 12, paddingBottom: 20, gap: 12 },
   card:           { backgroundColor: COLORS.bgCard, borderRadius: 14, padding: 16, borderLeftWidth: 4, gap: 8 },

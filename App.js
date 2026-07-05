@@ -211,16 +211,18 @@ export default function App() {
   return (
     <PriceProvider>
       <OrderProvider>
-        <NavigationContainer>
-          <Tab.Navigator
-            screenOptions={{
-              headerShown: false,
-              tabBarStyle: styles.tabBar,
-              tabBarActiveTintColor: COLORS.accent,
-              tabBarInactiveTintColor: COLORS.muted,
-              tabBarLabelStyle: styles.tabLabel,
-            }}
-          >
+        <View style={styles.appShell}>
+          <NavigationContainer>
+            <Tab.Navigator
+              screenOptions={{
+                headerShown: false,
+                tabBarStyle: styles.tabBar,
+                tabBarActiveTintColor: COLORS.accent,
+                tabBarInactiveTintColor: COLORS.muted,
+                tabBarLabelStyle: styles.tabLabel,
+                tabBarItemStyle: styles.tabBarItem,
+              }}
+            >
             <Tab.Screen
               name="Order"
               options={{
@@ -241,22 +243,39 @@ export default function App() {
             )}
           </Tab.Navigator>
 
-          <PinModal
-            visible={showPin}
-            isUnlocked={kitchenUnlocked}
-            onSuccess={handlePinSuccess}
-            onDismiss={handlePinDismiss}
-          />
-        </NavigationContainer>
+            <PinModal
+              visible={showPin}
+              isUnlocked={kitchenUnlocked}
+              onSuccess={handlePinSuccess}
+              onDismiss={handlePinDismiss}
+            />
+          </NavigationContainer>
+        </View>
       </OrderProvider>
     </PriceProvider>
   );
 }
 
 const styles = StyleSheet.create({
-  tabBar:         { backgroundColor: COLORS.bgDeep, borderTopColor: COLORS.bgCard, borderTopWidth: 1, paddingBottom: 38, paddingTop: 8, height: 105 },
-  tabLabel:       { fontSize: 11, fontWeight: '700', letterSpacing: 0.5, marginTop: 2 },
-  tabIcon:        { fontSize: 22 },
+  appShell: { flex: 1, backgroundColor: COLORS.bg },
+  tabBar: {
+    backgroundColor: COLORS.bgDeep,
+    borderTopColor: COLORS.bgCard,
+    borderTopWidth: 1,
+    borderRadius: 20,
+    marginHorizontal: 12,
+    marginBottom: 12,
+    paddingBottom: 8,
+    paddingTop: 8,
+    height: 76,
+    width: '100%',
+    maxWidth: 760,
+    alignSelf: 'center',
+    overflow: 'hidden',
+  },
+  tabBarItem: { minHeight: 56, justifyContent: 'center' },
+  tabLabel: { fontSize: 10, fontWeight: '700', letterSpacing: 0.5, marginTop: 2 },
+  tabIcon: { fontSize: 22 },
   overlay:        { flex: 1, backgroundColor: 'rgba(0,0,0,0.75)', justifyContent: 'center', alignItems: 'center' },
   modalCard:      { backgroundColor: COLORS.bgCard, borderRadius: 16, padding: 28, width: '82%', alignItems: 'center', gap: 12, borderWidth: 1, borderColor: COLORS.border },
   modalTitle:     { color: COLORS.yellow, fontSize: 16, fontWeight: '900', letterSpacing: 2 },
