@@ -6,7 +6,7 @@ import { supabase } from '../config/supabase';
 
 const OrderContext = createContext(null);
 
-const STATUS_ORDER = ['awaiting_payment', 'paid', 'making', 'ready', 'done', 'expired'];
+const STATUS_ORDER = ['awaiting_payment', 'paid', 'making', 'ready', 'done', 'expired', 'cancelled'];
 
 function formatTime(date) {
   const h = date.getHours();
@@ -28,11 +28,11 @@ async function sendPushNotification(token, title, body) {
 }
 
 export function OrderProvider({ children }) {
-  const [items, setItems] = useState({});
-  const [customerName, setCustomerName] = useState('');
-  const [phoneNumber, setPhoneNumber] = useState('');
-  const [note, setNote] = useState('');
-  const [lastOrder, setLastOrder] = useState(null);
+  const [items, setItems]                 = useState({});
+  const [customerName, setCustomerName]   = useState('');
+  const [phoneNumber, setPhoneNumber]     = useState('');
+  const [note, setNote]                   = useState('');
+  const [lastOrder, setLastOrder]         = useState(null);
   const [kitchenOrders, setKitchenOrders] = useState([]);
 
   const sortOrders = useCallback((orders) => {
@@ -46,6 +46,7 @@ export function OrderProvider({ children }) {
     });
   }, []);
 
+  // Realtime subscription
   useEffect(() => {
     const channel = supabase
       .channel('orders-kitchen')
@@ -61,33 +62,33 @@ export function OrderProvider({ children }) {
           );
           return sortOrders(newOrders);
         });
-        setLastOrder(prev => prev && prev.id === updated.id ? { ...prev, status: updated.status } : prev);
+        setLastOrder(prev =>
+          prev && prev.id === updated.id ? { ...prev, status: updated.status } : prev
+        );
       })
       .subscribe();
     return () => supabase.removeChannel(channel);
   }, [sortOrders]);
 
+  // ── Customer actions ───────────────────────────────────────
   const addItem = useCallback((id) =>
     setItems(prev => ({ ...prev, [id]: (prev[id] || 0) + 1 })), []);
 
   const removeItem = useCallback((id) =>
     setItems(prev => {
-      if (!prev[id] || prev[id] <= 1) {
-        const next = { ...prev };
-        delete next[id];
-        return next;
-      }
+      if (!prev[id] || prev[id] <= 1) { const n = { ...prev }; delete n[id]; return n; }
       return { ...prev, [id]: prev[id] - 1 };
     }), []);
 
-  const getQty = useCallback((id) => items[id] || 0, [items]);
-  const getCount = useCallback(() => Object.values(items).reduce((a, b) => a + b, 0), [items]);
-  const getTotal = useCallback((menu) => menu.reduce((s, m) => s + (items[m.id] || 0) * m.price, 0), [items]);
+  const getQty       = useCallback((id) => items[id] || 0, [items]);
+  const getCount     = useCallback(() => Object.values(items).reduce((a, b) => a + b, 0), [items]);
+  const getTotal     = useCallback((menu) => menu.reduce((s, m) => s + (items[m.id] || 0) * m.price, 0), [items]);
   const getCartItems = useCallback((menu) =>
     menu.filter(m => (items[m.id] || 0) > 0)
       .map(m => ({ ...m, qty: items[m.id], subtotal: items[m.id] * m.price })),
     [items]);
 
+  // ── Place order ────────────────────────────────────────────
   const placeOrder = useCallback(async (menu, deviceToken) => {
     const num = `#${Math.floor(1000 + Math.random() * 8999)}`;
 
@@ -154,6 +155,8 @@ export function OrderProvider({ children }) {
       id: orderId,
       order_number: num,
       customer_name: name,
+      phone_number: phone,
+      note: orderNote,
       items: orderItems,
       total,
       status: 'awaiting_payment',
@@ -166,30 +169,30 @@ export function OrderProvider({ children }) {
     return num;
   }, [items, customerName, phoneNumber, note, sortOrders]);
 
+  // ── Mark as paid ───────────────────────────────────────────
   const markOrderAsPaid = useCallback(async (orderId) => {
     const currentOrder = kitchenOrders.find(o => o.id === orderId) || lastOrder;
     if (!currentOrder) return;
 
-    const now = new Date();
     const updatedOrder = {
       ...currentOrder,
       status: 'paid',
       paymentStatus: 'paid',
-      paymentConfirmedAt: now.toISOString(),
+      paymentConfirmedAt: new Date().toISOString(),
     };
 
     setKitchenOrders(prev => sortOrders(prev.map(o => o.id === orderId ? updatedOrder : o)));
-    setLastOrder(prev => prev && prev.id === orderId ? { ...prev, ...updatedOrder, status: 'paid', paymentStatus: 'paid' } : prev);
+    setLastOrder(prev => prev && prev.id === orderId ? { ...prev, status: 'paid', paymentStatus: 'paid' } : prev);
 
     supabase.from('orders').update({ status: 'paid' }).eq('id', orderId).then(({ error }) => {
       if (error) console.log('Supabase update error:', error.message);
     });
   }, [kitchenOrders, lastOrder, sortOrders]);
 
+  // ── Expire order ───────────────────────────────────────────
   const expireOrder = useCallback(async (orderId) => {
     const currentOrder = kitchenOrders.find(o => o.id === orderId) || lastOrder;
-    if (!currentOrder) return;
-    if (currentOrder.status !== 'awaiting_payment') return;
+    if (!currentOrder || currentOrder.status !== 'awaiting_payment') return;
 
     const updatedOrder = {
       ...currentOrder,
@@ -199,19 +202,49 @@ export function OrderProvider({ children }) {
     };
 
     setKitchenOrders(prev => sortOrders(prev.map(o => o.id === orderId ? updatedOrder : o)));
-    setLastOrder(prev => prev && prev.id === orderId ? { ...prev, ...updatedOrder, status: 'expired', paymentStatus: 'expired' } : prev);
+    setLastOrder(prev => prev && prev.id === orderId ? { ...prev, status: 'expired', paymentStatus: 'expired' } : prev);
 
     supabase.from('orders').update({ status: 'expired' }).eq('id', orderId).then(({ error }) => {
       if (error) console.log('Supabase update error:', error.message);
     });
   }, [kitchenOrders, lastOrder, sortOrders]);
 
+  // ── Cancel order ───────────────────────────────────────────
+  const cancelOrder = useCallback(async (orderId) => {
+    const currentOrder = kitchenOrders.find(o => o.id === orderId);
+    if (!currentOrder) return;
+
+    const updatedOrder = {
+      ...currentOrder,
+      status: 'cancelled',
+      cancelledAt: new Date().toISOString(),
+    };
+
+    setKitchenOrders(prev => sortOrders(prev.map(o => o.id === orderId ? updatedOrder : o)));
+    setLastOrder(prev => prev && prev.id === orderId ? { ...prev, status: 'cancelled' } : prev);
+
+    supabase.from('orders').update({ status: 'cancelled' }).eq('id', orderId).then(({ error }) => {
+      if (error) console.log('Supabase update error:', error.message);
+    });
+
+    // Notify customer their order was cancelled
+    if (currentOrder.deviceToken) {
+      sendPushNotification(
+        currentOrder.deviceToken,
+        '❌ Order Cancelled',
+        `Sorry, order ${currentOrder.orderNumber} has been cancelled. Please contact the shop for assistance.`
+      );
+    }
+  }, [kitchenOrders, sortOrders]);
+
+  // ── Advance order status ───────────────────────────────────
   const advanceOrder = useCallback(async (orderId) => {
     const currentOrder = kitchenOrders.find(o => o.id === orderId);
     if (!currentOrder) return;
 
     let nextStatus = 'done';
-    if (currentOrder.status === 'paid') nextStatus = 'making';
+    if (currentOrder.status === 'awaiting_payment') nextStatus = 'paid';
+    else if (currentOrder.status === 'paid') nextStatus = 'making';
     else if (currentOrder.status === 'making') nextStatus = 'ready';
     else if (currentOrder.status === 'ready') nextStatus = 'done';
 
@@ -222,17 +255,29 @@ export function OrderProvider({ children }) {
       if (error) console.log('Supabase update error:', error.message);
     });
 
-    if (nextStatus === 'ready' && currentOrder.deviceToken) {
-      sendPushNotification(
-        currentOrder.deviceToken,
-        '🍞 Your kota is ready!',
-        `Order ${currentOrder.orderNumber} is ready for collection!`
-      );
+    // Send push notification based on new status
+    if (currentOrder.deviceToken) {
+      if (nextStatus === 'making') {
+        sendPushNotification(
+          currentOrder.deviceToken,
+          '👨‍🍳 Your kota is being prepared!',
+          `Order ${currentOrder.orderNumber} is now being made. It will be ready soon!`
+        );
+      } else if (nextStatus === 'ready') {
+        sendPushNotification(
+          currentOrder.deviceToken,
+          '🍞 Your kota is ready!',
+          `Order ${currentOrder.orderNumber} is ready for collection. Come to the counter!`
+        );
+      }
     }
   }, [kitchenOrders, sortOrders]);
 
+  // ── Clear done/cancelled/expired orders ────────────────────
   const clearDoneOrders = useCallback(() => {
-    setKitchenOrders(prev => prev.filter(o => o.status !== 'done' && o.status !== 'expired'));
+    setKitchenOrders(prev =>
+      prev.filter(o => o.status !== 'done' && o.status !== 'expired' && o.status !== 'cancelled')
+    );
   }, []);
 
   const clearLastOrder = useCallback(() => setLastOrder(null), []);
@@ -254,6 +299,7 @@ export function OrderProvider({ children }) {
     placeOrder,
     markOrderAsPaid,
     expireOrder,
+    cancelOrder,
     lastOrder,
     clearLastOrder,
     kitchenOrders,

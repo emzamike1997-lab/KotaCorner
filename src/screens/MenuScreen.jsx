@@ -8,15 +8,24 @@ import { useOrderStore } from '../store/orderStore';
 import { usePriceStore } from '../store/priceStore';
 import MenuItem from '../components/MenuItem';
 
+const STATUS_LABELS = {
+  awaiting_payment: { text: '⏳ Awaiting payment — tap to view', color: '#F5C842', bg: '#2d2300', border: '#F5C842' },
+  paid:             { text: '💳 Payment confirmed — tap to track', color: '#4caf50', bg: '#0d2a0d', border: '#4caf50' },
+  making:           { text: '👨‍🍳 Being prepared — tap to track', color: '#F5C842', bg: '#2d2300', border: '#F5C842' },
+  ready:            { text: '🍞 Ready to collect! Tap to view', color: '#4caf50', bg: '#0d2a0d', border: '#4caf50' },
+  done:             { text: '✓ Order collected', color: COLORS.muted, bg: COLORS.bgCard, border: COLORS.border },
+  expired:          { text: '⏰ Order expired — tap to see details', color: '#cc3333', bg: '#2a0d0d', border: '#cc3333' },
+  cancelled:        { text: '❌ Order cancelled — tap to see details', color: '#cc3333', bg: '#2a0d0d', border: '#cc3333' },
+};
+
 export default function MenuScreen({ navigation, onShopNameTap }) {
-  const { customerName, setName, getCount, getTotal, lastOrder } = useOrderStore();
+  const { customerName, getCount, getTotal, lastOrder } = useOrderStore();
   const { getMenu } = usePriceStore();
 
   const LIVE_MENU = getMenu();
   const count = getCount();
   const total = getTotal(LIVE_MENU);
-  const canOrder = count > 0 && customerName.trim().length > 0;
-  const hasActiveOrder = lastOrder && count === 0;
+  const hasActiveOrder = !!lastOrder;
 
   const menuSections = [
     { title: 'Kota Menu', subtitle: 'Signature combos', key: 'kota', data: LIVE_MENU.filter((item) => item.section === 'Kota Menu') },
@@ -25,18 +34,33 @@ export default function MenuScreen({ navigation, onShopNameTap }) {
   ].filter((section) => section.data.length > 0);
 
   const handleCart = useCallback(() => {
-    if (count > 0) {
-      navigation.navigate('Cart');
-    } else if (hasActiveOrder) {
-      navigation.navigate('Confirm');
-    }
+    if (count > 0) navigation.navigate('Cart');
+    else if (hasActiveOrder) navigation.navigate('Confirm');
   }, [count, navigation, hasActiveOrder]);
 
-  const handleOrder = useCallback(() => {
-    if (canOrder) navigation.navigate('Cart');
-  }, [canOrder, navigation]);
+  const handleCheckout = useCallback(() => {
+    navigation.navigate('Cart');
+  }, [navigation]);
+
+  const handleTrackingBanner = useCallback(() => {
+    navigation.navigate('Confirm');
+  }, [navigation]);
+
+  // Step pill navigation
+  const handleStepPress = useCallback((step) => {
+    if (step === 'Review Order') {
+      if (count > 0) navigation.navigate('Cart');
+    } else if (step === 'Pay') {
+      if (count > 0) navigation.navigate('Cart');
+      else if (hasActiveOrder) navigation.navigate('Confirm');
+    } else if (step === 'Collect') {
+      if (hasActiveOrder) navigation.navigate('Confirm');
+    }
+    // 'Choose Food' does nothing — already on menu
+  }, [count, navigation, hasActiveOrder]);
 
   const renderItem = useCallback(({ item }) => <MenuItem item={item} />, []);
+
   const renderSectionHeader = useCallback(({ section }) => (
     <View style={styles.sectionHeader}>
       <Text style={styles.sectionTitle}>{section.title}</Text>
@@ -46,261 +70,183 @@ export default function MenuScreen({ navigation, onShopNameTap }) {
 
   const keyExtractor = useCallback((item) => String(item.id), []);
 
-  const Header = (
-    <View style={styles.heroCard}>
-      <View style={styles.heroTop}>
-        <View style={styles.heroBadge}>
-          <Text style={styles.heroBadgeText}>FIREHOUSE</Text>
-        </View>
-        <TouchableOpacity style={styles.cartBtn} onPress={handleCart} disabled={count === 0 && !hasActiveOrder}>
-          <Text style={styles.cartIcon}>🛒</Text>
-          <View style={styles.badge}>
-            <Text style={styles.badgeText}>{count}</Text>
-          </View>
-        </TouchableOpacity>
-      </View>
-      <Text style={styles.shopName}>KOTA CORNER</Text>
-      <Text style={styles.tagline}>Fresh kota, ready for collection · Open now</Text>
-      <View style={styles.stepRow}>
-        {['Choose Food', 'Review Order', 'Pay', 'Collect'].map((step, index) => (
-          <View key={step} style={[styles.stepPill, index === 0 && styles.stepPillActive]}>
-            <Text style={[styles.stepPillText, index === 0 && styles.stepPillTextActive]}>{step}</Text>
-          </View>
-        ))}
-      </View>
-    </View>
-  );
+  const statusMeta = lastOrder ? (STATUS_LABELS[lastOrder.status] || STATUS_LABELS.awaiting_payment) : null;
+
+  // Determine active step based on order status
+  const activeStep = !hasActiveOrder ? 0
+    : lastOrder.status === 'awaiting_payment' ? 2
+    : lastOrder.status === 'paid' || lastOrder.status === 'making' ? 2
+    : lastOrder.status === 'ready' ? 3
+    : lastOrder.status === 'done' ? 3
+    : 0;
+
+  const steps = ['Choose Food', 'Review Order', 'Pay', 'Collect'];
 
   return (
     <SafeAreaView style={styles.safe}>
-      <StatusBar barStyle="light-content" backgroundColor={COLORS.bgDeep} />
+      <StatusBar barStyle="light-content" backgroundColor={COLORS.bg} />
 
       <View style={styles.screenShell}>
-        {hasActiveOrder && (
-          <TouchableOpacity style={styles.trackingBanner} onPress={() => navigation.navigate('Confirm')}>
-            <Text style={styles.trackingText}>📍 Order {lastOrder.orderNumber} in progress — tap to track</Text>
+
+        {/* ── Header ── */}
+        <View style={styles.header}>
+          <TouchableOpacity onPress={onShopNameTap} activeOpacity={1}>
+            <Text style={styles.shopName}>FIREHOUSE</Text>
+            <Text style={styles.tagline}>Order & Collect  ·  Open Now</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.cartBtn}
+            onPress={handleCart}
+            disabled={count === 0 && !hasActiveOrder}
+          >
+            <Text style={styles.cartIcon}>🛒</Text>
+            <View style={styles.badge}>
+              <Text style={styles.badgeText}>{count}</Text>
+            </View>
+          </TouchableOpacity>
+        </View>
+
+        {/* ── Tracking banner ── */}
+        {hasActiveOrder && statusMeta && (
+          <TouchableOpacity
+            style={[styles.trackingBanner, {
+              backgroundColor: statusMeta.bg,
+              borderColor: statusMeta.border,
+            }]}
+            onPress={handleTrackingBanner}
+            activeOpacity={0.8}
+          >
+            <Text style={[styles.trackingText, { color: statusMeta.color }]} numberOfLines={1}>
+              {lastOrder.orderNumber} · {statusMeta.text}
+            </Text>
+            <Text style={[styles.trackingCta, { color: statusMeta.color }]}>View →</Text>
           </TouchableOpacity>
         )}
 
+        {/* ── Step pills — functional ── */}
+        <View style={styles.stepRow}>
+          {steps.map((step, index) => {
+            const isActive = index === activeStep;
+            const isClickable = step !== 'Choose Food';
+            return (
+              <TouchableOpacity
+                key={step}
+                style={[styles.stepPill, isActive && styles.stepPillActive]}
+                onPress={() => handleStepPress(step)}
+                disabled={!isClickable}
+                activeOpacity={isClickable ? 0.7 : 1}
+              >
+                <Text style={[styles.stepPillText, isActive && styles.stepPillTextActive]}>
+                  {step}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+
+        {/* ── Menu list ── */}
         <SectionList
           sections={menuSections}
           renderItem={renderItem}
           renderSectionHeader={renderSectionHeader}
           keyExtractor={keyExtractor}
-          ListHeaderComponent={Header}
-          contentContainerStyle={styles.listContent}
+          contentContainerStyle={[
+            styles.listContent,
+            count > 0 && { paddingBottom: 110 },
+          ]}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
           stickySectionHeadersEnabled={false}
         />
 
+        {/* ── Checkout bar — fixed at bottom ── */}
         {count > 0 && (
-          <TouchableOpacity style={styles.summaryBar} onPress={handleOrder} activeOpacity={0.9}>
-            <View style={styles.summaryCopy}>
-              <Text style={styles.summaryLabel}>View Order</Text>
-              <Text style={styles.summaryText}>{count} {count === 1 ? 'item' : 'items'} · R{total}</Text>
+          <View style={styles.checkoutBar}>
+            <View style={styles.checkoutInfo}>
+              <Text style={styles.checkoutCount}>{count} {count === 1 ? 'item' : 'items'}</Text>
+              <Text style={styles.checkoutTotal}>R{total}</Text>
             </View>
-            <Text style={styles.summaryCta}>Checkout</Text>
-          </TouchableOpacity>
+            <TouchableOpacity style={styles.checkoutBtn} onPress={handleCheckout}>
+              <Text style={styles.checkoutBtnText}>Checkout →</Text>
+            </TouchableOpacity>
+          </View>
         )}
+
       </View>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: {
-    flex: 1,
+  safe:           { flex: 1, backgroundColor: COLORS.bg },
+  screenShell:    { flex: 1, width: '100%', maxWidth: 900, alignSelf: 'center' },
+
+  // Header — properly padded so shop name is visible
+  header:         {
     backgroundColor: COLORS.bg,
-  },
-  screenShell: {
-    flex: 1,
-    width: '100%',
-    maxWidth: 900,
-    alignSelf: 'center',
-    paddingBottom: 0,
-  },
-  heroCard: {
-    backgroundColor: COLORS.bgCard,
-    borderRadius: 24,
-    borderWidth: 1,
-    borderColor: COLORS.border,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
     paddingHorizontal: 20,
-    paddingVertical: 20,
-    marginHorizontal: 16,
-    marginTop: 14,
-    marginBottom: 10,
-  },
-  heroTop: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  heroBadge: {
-    backgroundColor: COLORS.accentSoft,
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-  },
-  heroBadgeText: {
-    color: COLORS.yellow,
-    fontSize: 10,
-    fontWeight: '800',
-    letterSpacing: 1.4,
-  },
-  shopName: {
-    color: COLORS.yellow,
-    fontSize: 24,
-    fontWeight: '900',
-    letterSpacing: 2.5,
-    marginTop: 10,
-  },
-  tagline: {
-    color: COLORS.muted,
-    fontSize: 12,
-    marginTop: 4,
-    letterSpacing: 0.4,
-  },
-  stepRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 6,
-    marginTop: 10,
-  },
-  stepPill: {
-    backgroundColor: COLORS.bg,
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-  },
-  stepPillActive: {
-    backgroundColor: COLORS.accentSoft,
-    borderColor: COLORS.accent,
-  },
-  stepPillText: {
-    color: COLORS.muted,
-    fontSize: 10,
-    fontWeight: '700',
-    letterSpacing: 0.5,
-  },
-  stepPillTextActive: {
-    color: COLORS.yellow,
-  },
-  cartBtn: {
-    backgroundColor: COLORS.accent,
-    borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  cartIcon: {
-    fontSize: 15,
-  },
-  badge: {
-    backgroundColor: COLORS.yellow,
-    borderRadius: 999,
-    paddingHorizontal: 6,
-    paddingVertical: 1,
-    minWidth: 20,
-    alignItems: 'center',
-  },
-  badgeText: {
-    color: COLORS.bg,
-    fontSize: 11,
-    fontWeight: '800',
-  },
-  trackingBanner: {
-    backgroundColor: '#0d2a0d',
+    paddingTop: 52,
+    paddingBottom: 14,
     borderBottomWidth: 1,
-    borderBottomColor: '#1a4a1a',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    marginHorizontal: 14,
-    marginTop: 6,
-    borderRadius: 12,
+    borderBottomColor: COLORS.bgCard,
   },
-  trackingText: {
-    color: '#4caf50',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  listContent: {
-    paddingHorizontal: 16,
-    paddingBottom: 180,
-    paddingTop: 4,
-  },
-  sectionHeader: {
-    backgroundColor: COLORS.bgDeep,
-    borderRadius: 14,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    marginTop: 10,
-    marginBottom: 8,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-  },
-  sectionTitle: {
-    color: COLORS.yellow,
-    fontSize: 14,
-    fontWeight: '800',
-    letterSpacing: 1.2,
-    textTransform: 'uppercase',
-  },
-  sectionSubtitle: {
-    color: COLORS.muted,
-    fontSize: 11,
-    marginTop: 2,
-  },
-  summaryBar: {
-    position: 'absolute',
-    left: 12,
-    right: 12,
-    bottom: 92,
-    maxWidth: 780,
-    alignSelf: 'center',
-    backgroundColor: COLORS.bgDeep,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
+  shopName:       { color: COLORS.yellow, fontSize: 22, fontWeight: '900', letterSpacing: 3 },
+  tagline:        { color: COLORS.muted, fontSize: 11, marginTop: 2, letterSpacing: 0.5 },
+  cartBtn:        { backgroundColor: COLORS.accent, borderRadius: 999, paddingHorizontal: 14, paddingVertical: 8, flexDirection: 'row', alignItems: 'center', gap: 6 },
+  cartIcon:       { fontSize: 16 },
+  badge:          { backgroundColor: COLORS.yellow, borderRadius: 999, paddingHorizontal: 6, paddingVertical: 1, minWidth: 20, alignItems: 'center' },
+  badgeText:      { color: COLORS.bg, fontSize: 11, fontWeight: '800' },
+
+  // Tracking banner
+  trackingBanner: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    shadowColor: '#000',
-    shadowOpacity: 0.25,
-    shadowRadius: 10,
-    elevation: 6,
+    marginHorizontal: 14,
+    marginTop: 10,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderWidth: 1,
   },
-  summaryCopy: {
-    flex: 1,
-    paddingRight: 12,
+  trackingText:   { flex: 1, fontSize: 12, fontWeight: '700', lineHeight: 16 },
+  trackingCta:    { fontSize: 12, fontWeight: '800', marginLeft: 8 },
+
+  // Step pills — tappable
+  stepRow:        { flexDirection: 'row', flexWrap: 'wrap', gap: 6, paddingHorizontal: 14, paddingTop: 10, paddingBottom: 4 },
+  stepPill:       { backgroundColor: COLORS.bgCard, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 6, borderWidth: 1, borderColor: COLORS.border },
+  stepPillActive: { backgroundColor: COLORS.accentSoft, borderColor: COLORS.accent },
+  stepPillText:   { color: COLORS.muted, fontSize: 10, fontWeight: '700', letterSpacing: 0.5 },
+  stepPillTextActive: { color: COLORS.yellow },
+
+  // List
+  listContent:    { paddingHorizontal: 14, paddingBottom: 20, paddingTop: 6 },
+  sectionHeader:  { backgroundColor: COLORS.bgDeep, borderRadius: 14, paddingHorizontal: 12, paddingVertical: 10, marginTop: 10, marginBottom: 8, borderWidth: 1, borderColor: COLORS.border },
+  sectionTitle:   { color: COLORS.yellow, fontSize: 14, fontWeight: '800', letterSpacing: 1.2, textTransform: 'uppercase' },
+  sectionSubtitle:{ color: COLORS.muted, fontSize: 11, marginTop: 2 },
+
+  // Checkout bar — fixed at bottom
+  checkoutBar:    {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: COLORS.bgDeep,
+    borderTopWidth: 1,
+    borderTopColor: COLORS.bgCard,
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    paddingBottom: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
   },
-  summaryLabel: {
-    color: COLORS.muted,
-    fontSize: 10,
-    fontWeight: '700',
-    letterSpacing: 1,
-    textTransform: 'uppercase',
-  },
-  summaryText: {
-    color: COLORS.text,
-    fontSize: 14,
-    fontWeight: '700',
-    marginTop: 2,
-  },
-  summaryCta: {
-    color: COLORS.bg,
-    backgroundColor: COLORS.accent,
-    borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    fontSize: 13,
-    fontWeight: '800',
-    letterSpacing: 0.4,
-  },
+  checkoutInfo:   { gap: 2 },
+  checkoutCount:  { color: COLORS.muted, fontSize: 11, fontWeight: '600', letterSpacing: 0.5, textTransform: 'uppercase' },
+  checkoutTotal:  { color: COLORS.yellow, fontSize: 24, fontWeight: '900' },
+  checkoutBtn:    { backgroundColor: COLORS.accent, borderRadius: 14, paddingHorizontal: 24, paddingVertical: 14 },
+  checkoutBtnText:{ color: COLORS.text, fontSize: 14, fontWeight: '800', letterSpacing: 0.5 },
 });

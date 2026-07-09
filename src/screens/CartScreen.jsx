@@ -1,9 +1,19 @@
-import React, { useCallback } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import { View, Text, FlatList, TextInput, TouchableOpacity, StyleSheet, SafeAreaView, StatusBar, Alert } from 'react-native';
 import { useAudioPlayer } from 'expo-audio';
 import { COLORS } from '../constants';
 import { useOrderStore } from '../store/orderStore';
 import { usePriceStore } from '../store/priceStore';
+
+// ── Phone validation ──────────────────────────────────────────
+function validatePhone(phone) {
+  const digits = phone.replace(/[^0-9]/g, '');
+  // Must be 10 digits and start with 0, or 11 digits starting with 27
+  if (digits.length === 10 && digits.startsWith('0')) return true;
+  if (digits.length === 11 && digits.startsWith('27')) return true;
+  if (digits.length === 12 && digits.startsWith('270')) return true;
+  return false;
+}
 
 function CartRow({ item }) {
   const { addItem, removeItem } = useOrderStore();
@@ -32,30 +42,67 @@ function CartRow({ item }) {
 export default function CartScreen({ navigation, deviceToken }) {
   const { customerName, phoneNumber, note, setName, setPhoneNumber, setNote, placeOrder, getCartItems, getTotal } = useOrderStore();
   const { getMenu } = usePriceStore();
+  const [phoneError, setPhoneError] = useState('');
+  const [submitting, setSubmitting] = useState(false);
 
   const LIVE_MENU = getMenu();
   const cartItems = getCartItems(LIVE_MENU);
   const total = getTotal(LIVE_MENU);
-  const isPhoneValid = phoneNumber.replace(/[^0-9]/g, '').length >= 10;
+
+  const isPhoneValid = validatePhone(phoneNumber);
   const canPlace = cartItems.length > 0 && customerName.trim().length > 0 && isPhoneValid;
 
   const player = useAudioPlayer(require('../../assets/sounds/ding.wav'));
 
+  const handlePhoneChange = (val) => {
+    setPhoneNumber(val);
+    if (phoneError) setPhoneError('');
+  };
+
+  const handlePhoneBlur = () => {
+    if (phoneNumber.trim().length > 0 && !isPhoneValid) {
+      setPhoneError('Please enter a valid South African number (e.g. 0712345678)');
+    } else {
+      setPhoneError('');
+    }
+  };
+
   const handlePlace = useCallback(async () => {
-    if (!canPlace) {
-      Alert.alert('Details needed', 'Please add your name and a valid phone or WhatsApp number before placing your order.');
+    // Validate name
+    if (!customerName.trim()) {
+      Alert.alert('Name required', 'Please enter your name.');
       return;
     }
 
+    // Validate phone
+    if (!phoneNumber.trim()) {
+      setPhoneError('Please enter your phone or WhatsApp number.');
+      return;
+    }
+    if (!isPhoneValid) {
+      setPhoneError('Please enter a valid South African number (e.g. 0712345678)');
+      return;
+    }
+
+    if (submitting) return;
+
     try {
+      setSubmitting(true);
       player.seekTo(0);
       player.play();
     } catch (e) {
       console.log('Sound play error:', e);
     }
-    await placeOrder(LIVE_MENU, deviceToken);
-    navigation.navigate('Confirm');
-  }, [canPlace, placeOrder, navigation, deviceToken, player, LIVE_MENU]);
+
+    try {
+      await placeOrder(LIVE_MENU, deviceToken);
+      navigation.navigate('Confirm');
+    } catch (e) {
+      Alert.alert('Error', 'Could not place your order. Please try again.');
+    } finally {
+      setSubmitting(false);
+    }
+  }, [canPlace, placeOrder, navigation, deviceToken, player, LIVE_MENU, customerName, phoneNumber, isPhoneValid, submitting]);
 
   const renderItem = useCallback(({ item }) => <CartRow item={item} />, []);
   const keyExtractor = useCallback((item) => String(item.id), []);
@@ -71,42 +118,48 @@ export default function CartScreen({ navigation, deviceToken }) {
 
       <View style={styles.stepRow}>
         {['Choose Food', 'Review Order', 'Pay', 'Collect'].map((step, index) => (
-          <View key={step} style={[styles.stepPill, index === 2 && styles.stepPillActive]}>
-            <Text style={[styles.stepPillText, index === 2 && styles.stepPillTextActive]}>{step}</Text>
+          <View key={step} style={[styles.stepPill, index === 1 && styles.stepPillActive]}>
+            <Text style={[styles.stepPillText, index === 1 && styles.stepPillTextActive]}>{step}</Text>
           </View>
         ))}
       </View>
 
-      <Text style={styles.customerName}>{customerName.trim() ? customerName.toUpperCase() : 'YOUR NAME'}</Text>
-      <Text style={styles.smallText}>Pay within 30 minutes to confirm your order.</Text>
+      <Text style={styles.customerName}>{customerName.trim() ? customerName.toUpperCase() : 'YOUR ORDER'}</Text>
 
       <View style={styles.formBlock}>
-        <Text style={styles.inputLabel}>Name</Text>
+        <Text style={styles.inputLabel}>Name *</Text>
         <TextInput
           style={styles.input}
           value={customerName}
           onChangeText={setName}
-          placeholder="Your name"
+          placeholder="Your name for collection"
           placeholderTextColor={COLORS.muted}
           autoCapitalize="words"
         />
 
-        <Text style={styles.inputLabel}>Phone / WhatsApp</Text>
+        <Text style={styles.inputLabel}>Phone / WhatsApp *</Text>
         <TextInput
-          style={styles.input}
+          style={[styles.input, phoneError ? styles.inputError : null]}
           value={phoneNumber}
-          onChangeText={setPhoneNumber}
+          onChangeText={handlePhoneChange}
+          onBlur={handlePhoneBlur}
           placeholder="e.g. 0712345678"
           placeholderTextColor={COLORS.muted}
           keyboardType="phone-pad"
+          maxLength={15}
         />
+        {phoneError ? (
+          <Text style={styles.errorText}>⚠ {phoneError}</Text>
+        ) : isPhoneValid && phoneNumber.trim() ? (
+          <Text style={styles.validText}>✓ Valid number</Text>
+        ) : null}
 
         <Text style={styles.inputLabel}>Note (optional)</Text>
         <TextInput
           style={[styles.input, styles.noteInput]}
           value={note}
           onChangeText={setNote}
-          placeholder="Any extra notes for the kitchen"
+          placeholder="Any special requests for the kitchen"
           placeholderTextColor={COLORS.muted}
           multiline
           numberOfLines={3}
@@ -174,15 +227,25 @@ export default function CartScreen({ navigation, deviceToken }) {
           ListFooterComponent={Footer}
           contentContainerStyle={styles.listContent}
           showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
         />
         <View style={styles.footer}>
-          {!canPlace && (
-            <Text style={styles.warning}>Please add your name and a valid phone number to continue.</Text>
+          {!canPlace && customerName.trim() && phoneNumber.trim() && !isPhoneValid && (
+            <Text style={styles.warning}>⚠ Please enter a valid phone number to continue.</Text>
           )}
-          <TouchableOpacity style={[styles.placeBtn, !canPlace && styles.placeBtnDisabled]} onPress={handlePlace} disabled={!canPlace}>
-            <Text style={styles.placeBtnText}>SUBMIT ORDER</Text>
+          {!canPlace && !customerName.trim() && (
+            <Text style={styles.warning}>Please enter your name and phone number.</Text>
+          )}
+          <TouchableOpacity
+            style={[styles.placeBtn, (!canPlace || submitting) && styles.placeBtnDisabled]}
+            onPress={handlePlace}
+            disabled={!canPlace || submitting}
+          >
+            <Text style={styles.placeBtnText}>
+              {submitting ? 'PLACING ORDER...' : '⚡  SUBMIT ORDER'}
+            </Text>
           </TouchableOpacity>
-          <Text style={styles.footerNote}>Payment required before preparation · Your order will only be prepared after payment is confirmed.</Text>
+          <Text style={styles.footerNote}>Payment required before preparation</Text>
         </View>
       </View>
     </SafeAreaView>
@@ -190,56 +253,58 @@ export default function CartScreen({ navigation, deviceToken }) {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: COLORS.bg },
-  screenShell: { flex: 1, width: '100%', maxWidth: 900, alignSelf: 'center' },
-  navBar: { backgroundColor: COLORS.bgDeep, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 12, paddingTop: 52, borderBottomWidth: 1, borderBottomColor: COLORS.bgCard },
-  backBtn: { paddingVertical: 4, paddingRight: 12, minWidth: 60 },
-  backBtnText: { color: COLORS.accent, fontSize: 14, fontWeight: '600' },
-  navTitle: { color: COLORS.yellow, fontSize: 14, fontWeight: '800', letterSpacing: 2 },
-  listContent: { paddingHorizontal: 16, paddingTop: 10, paddingBottom: 24 },
-  infoCard: { backgroundColor: COLORS.bgCard, borderRadius: 18, borderWidth: 1, borderColor: COLORS.border, padding: 16, marginBottom: 12 },
-  headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
-  sectionText: { color: COLORS.accent, fontSize: 11, fontWeight: '700', letterSpacing: 1.5 },
-  pill: { backgroundColor: COLORS.accentSoft, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999 },
-  pillText: { color: COLORS.yellow, fontSize: 10, fontWeight: '800', letterSpacing: 0.8 },
-  stepRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8, marginBottom: 6 },
-  stepPill: { backgroundColor: COLORS.bg, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 6, borderWidth: 1, borderColor: COLORS.border },
-  stepPillActive: { backgroundColor: COLORS.accentSoft, borderColor: COLORS.accent },
-  stepPillText: { color: COLORS.muted, fontSize: 10, fontWeight: '700', letterSpacing: 0.5 },
+  safe:               { flex: 1, backgroundColor: COLORS.bg },
+  screenShell:        { flex: 1, width: '100%', maxWidth: 900, alignSelf: 'center' },
+  navBar:             { backgroundColor: COLORS.bgDeep, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 12, paddingTop: 52, borderBottomWidth: 1, borderBottomColor: COLORS.bgCard },
+  backBtn:            { paddingVertical: 4, paddingRight: 12, minWidth: 60 },
+  backBtnText:        { color: COLORS.accent, fontSize: 14, fontWeight: '600' },
+  navTitle:           { color: COLORS.yellow, fontSize: 14, fontWeight: '800', letterSpacing: 2 },
+  listContent:        { paddingHorizontal: 16, paddingTop: 10, paddingBottom: 24 },
+  infoCard:           { backgroundColor: COLORS.bgCard, borderRadius: 18, borderWidth: 1, borderColor: COLORS.border, padding: 16, marginBottom: 12 },
+  headerRow:          { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
+  sectionText:        { color: COLORS.accent, fontSize: 11, fontWeight: '700', letterSpacing: 1.5 },
+  pill:               { backgroundColor: COLORS.accentSoft, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999 },
+  pillText:           { color: COLORS.yellow, fontSize: 10, fontWeight: '800', letterSpacing: 0.8 },
+  stepRow:            { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8, marginBottom: 6 },
+  stepPill:           { backgroundColor: COLORS.bg, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 6, borderWidth: 1, borderColor: COLORS.border },
+  stepPillActive:     { backgroundColor: COLORS.accentSoft, borderColor: COLORS.accent },
+  stepPillText:       { color: COLORS.muted, fontSize: 10, fontWeight: '700', letterSpacing: 0.5 },
   stepPillTextActive: { color: COLORS.yellow },
-  customerName: { color: COLORS.text, fontSize: 20, fontWeight: '800', letterSpacing: 1, marginTop: 2 },
-  smallText: { color: COLORS.muted, fontSize: 12, marginTop: 4 },
-  formBlock: { marginTop: 14, gap: 10 },
-  inputLabel: { color: COLORS.yellow, fontSize: 11, fontWeight: '700', letterSpacing: 1, textTransform: 'uppercase' },
-  input: { backgroundColor: COLORS.bg, borderRadius: 12, borderWidth: 1, borderColor: COLORS.border, paddingHorizontal: 14, paddingVertical: 12, color: COLORS.text, fontSize: 14 },
-  noteInput: { minHeight: 80, textAlignVertical: 'top' },
-  cartRow: { backgroundColor: COLORS.bgCard, borderRadius: 14, marginBottom: 10, padding: 14, flexDirection: 'row', alignItems: 'center', gap: 12, borderWidth: 1, borderColor: COLORS.border },
-  cartRowLeft: { flex: 1 },
-  cartItemName: { color: COLORS.text, fontSize: 12, fontWeight: '700', lineHeight: 16 },
-  cartItemSub: { color: COLORS.muted, fontSize: 11, marginTop: 2 },
-  cartRowRight: { alignItems: 'flex-end', gap: 8 },
-  stepper: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  stepBtn: { width: 30, height: 30, borderRadius: 15, borderWidth: 1.5, borderColor: COLORS.accent, alignItems: 'center', justifyContent: 'center' },
-  stepBtnAdd: { backgroundColor: COLORS.accent },
-  stepBtnText: { color: COLORS.accent, fontSize: 16, fontWeight: '700', lineHeight: 18 },
-  qty: { color: COLORS.text, fontSize: 15, fontWeight: '700', minWidth: 18, textAlign: 'center' },
-  cartItemSubtotal: { color: COLORS.yellow, fontSize: 16, fontWeight: '800' },
-  summaryBox: { backgroundColor: COLORS.bgCard, borderRadius: 16, marginTop: 6, padding: 16, gap: 8, borderWidth: 1, borderColor: COLORS.border },
-  summaryRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  summaryLabel: { color: COLORS.muted, fontSize: 13 },
-  summaryValue: { color: COLORS.text, fontSize: 13, fontWeight: '600' },
-  collectionValue: { color: '#4a9a4a' },
-  summaryTotal: { borderTopWidth: 1, borderTopColor: COLORS.border, paddingTop: 10, marginTop: 4 },
-  totalLabel: { color: COLORS.accent, fontSize: 12, fontWeight: '700', letterSpacing: 1 },
-  totalAmount: { color: COLORS.yellow, fontSize: 22, fontWeight: '800' },
-  footer: { backgroundColor: COLORS.bgDeep, borderTopWidth: 1, borderTopColor: COLORS.bgCard, paddingHorizontal: 16, paddingTop: 12, paddingBottom: 24, gap: 8 },
-  warning: { color: '#f5c842', fontSize: 12, textAlign: 'center' },
-  placeBtn: { backgroundColor: COLORS.accent, borderRadius: 14, paddingVertical: 14, alignItems: 'center' },
-  placeBtnDisabled: { backgroundColor: '#4a2010' },
-  placeBtnText: { color: COLORS.text, fontSize: 15, fontWeight: '800', letterSpacing: 1 },
-  footerNote: { color: COLORS.muted, fontSize: 11, textAlign: 'center' },
-  emptyWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12, paddingHorizontal: 24 },
-  emptyEmoji: { fontSize: 48 },
-  emptyText: { color: COLORS.muted, fontSize: 16 },
-  emptyLink: { color: COLORS.accent, fontSize: 14, fontWeight: '600' },
+  customerName:       { color: COLORS.text, fontSize: 20, fontWeight: '800', letterSpacing: 1, marginTop: 2 },
+  formBlock:          { marginTop: 14, gap: 8 },
+  inputLabel:         { color: COLORS.yellow, fontSize: 11, fontWeight: '700', letterSpacing: 1, textTransform: 'uppercase' },
+  input:              { backgroundColor: COLORS.bg, borderRadius: 12, borderWidth: 1, borderColor: COLORS.border, paddingHorizontal: 14, paddingVertical: 12, color: COLORS.text, fontSize: 14 },
+  inputError:         { borderColor: '#cc3333', borderWidth: 1.5 },
+  noteInput:          { minHeight: 80, textAlignVertical: 'top' },
+  errorText:          { color: '#cc3333', fontSize: 12, fontWeight: '600' },
+  validText:          { color: '#4caf50', fontSize: 12, fontWeight: '600' },
+  cartRow:            { backgroundColor: COLORS.bgCard, borderRadius: 14, marginBottom: 10, padding: 14, flexDirection: 'row', alignItems: 'center', gap: 12, borderWidth: 1, borderColor: COLORS.border },
+  cartRowLeft:        { flex: 1 },
+  cartItemName:       { color: COLORS.text, fontSize: 12, fontWeight: '700', lineHeight: 16 },
+  cartItemSub:        { color: COLORS.muted, fontSize: 11, marginTop: 2 },
+  cartRowRight:       { alignItems: 'flex-end', gap: 8 },
+  stepper:            { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  stepBtn:            { width: 30, height: 30, borderRadius: 15, borderWidth: 1.5, borderColor: COLORS.accent, alignItems: 'center', justifyContent: 'center' },
+  stepBtnAdd:         { backgroundColor: COLORS.accent },
+  stepBtnText:        { color: COLORS.accent, fontSize: 16, fontWeight: '700', lineHeight: 18 },
+  qty:                { color: COLORS.text, fontSize: 15, fontWeight: '700', minWidth: 18, textAlign: 'center' },
+  cartItemSubtotal:   { color: COLORS.yellow, fontSize: 16, fontWeight: '800' },
+  summaryBox:         { backgroundColor: COLORS.bgCard, borderRadius: 16, marginTop: 6, padding: 16, gap: 8, borderWidth: 1, borderColor: COLORS.border },
+  summaryRow:         { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  summaryLabel:       { color: COLORS.muted, fontSize: 13 },
+  summaryValue:       { color: COLORS.text, fontSize: 13, fontWeight: '600' },
+  collectionValue:    { color: '#4a9a4a' },
+  summaryTotal:       { borderTopWidth: 1, borderTopColor: COLORS.border, paddingTop: 10, marginTop: 4 },
+  totalLabel:         { color: COLORS.accent, fontSize: 12, fontWeight: '700', letterSpacing: 1 },
+  totalAmount:        { color: COLORS.yellow, fontSize: 22, fontWeight: '800' },
+  footer:             { backgroundColor: COLORS.bgDeep, borderTopWidth: 1, borderTopColor: COLORS.bgCard, paddingHorizontal: 16, paddingTop: 12, paddingBottom: 24, gap: 8 },
+  warning:            { color: '#F5C842', fontSize: 12, textAlign: 'center' },
+  placeBtn:           { backgroundColor: COLORS.accent, borderRadius: 14, paddingVertical: 14, alignItems: 'center' },
+  placeBtnDisabled:   { backgroundColor: '#4a2010' },
+  placeBtnText:       { color: COLORS.text, fontSize: 15, fontWeight: '800', letterSpacing: 1 },
+  footerNote:         { color: COLORS.muted, fontSize: 11, textAlign: 'center' },
+  emptyWrap:          { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12, paddingHorizontal: 24 },
+  emptyEmoji:         { fontSize: 48 },
+  emptyText:          { color: COLORS.muted, fontSize: 16 },
+  emptyLink:          { color: COLORS.accent, fontSize: 14, fontWeight: '600' },
 });
