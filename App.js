@@ -6,7 +6,6 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
-import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
@@ -179,9 +178,7 @@ function CustomerStack({ onShopNameTap, deviceToken }) {
   );
 }
 
-// ── Inner app uses safe area insets for tab bar ───────────────
-function AppInner() {
-  const insets = useSafeAreaInsets();
+export default function App() {
   const [kitchenUnlocked, setKitchenUnlocked] = useState(false);
   const [showPin, setShowPin] = useState(false);
   const [deviceToken, setDeviceToken] = useState(null);
@@ -211,66 +208,51 @@ function AppInner() {
 
   const handlePinDismiss = useCallback(() => setShowPin(false), []);
 
-  // Dynamic tab bar style using safe area insets
-  const tabBarStyle = {
-    ...styles.tabBar,
-    marginBottom: insets.bottom > 0 ? insets.bottom : 12,
-  };
-
   return (
-    <View style={styles.appShell}>
-      <NavigationContainer>
-        <Tab.Navigator
-          screenOptions={{
-            headerShown: false,
-            tabBarStyle,
-            tabBarActiveTintColor: COLORS.accent,
-            tabBarInactiveTintColor: COLORS.muted,
-            tabBarLabelStyle: styles.tabLabel,
-            tabBarItemStyle: styles.tabBarItem,
-          }}
-        >
-          <Tab.Screen
-            name="Order"
-            options={{
-              tabBarIcon: ({ color }) => <Text style={[styles.tabIcon, { color }]}>🧾</Text>,
-            }}
-          >
-            {() => <CustomerStack onShopNameTap={handleShopNameTap} deviceToken={deviceToken} />}
-          </Tab.Screen>
-
-          {kitchenUnlocked && (
-            <Tab.Screen
-              name="Kitchen"
-              component={KitchenScreen}
-              options={{
-                tabBarIcon: ({ color }) => <Text style={[styles.tabIcon, { color }]}>🍳</Text>,
+    <PriceProvider>
+      <OrderProvider>
+        <View style={styles.appShell}>
+          <NavigationContainer>
+            <Tab.Navigator
+              screenOptions={{
+                headerShown: false,
+                tabBarStyle: styles.tabBar,
+                tabBarActiveTintColor: COLORS.accent,
+                tabBarInactiveTintColor: COLORS.muted,
+                tabBarLabelStyle: styles.tabLabel,
+                tabBarItemStyle: styles.tabBarItem,
               }}
+            >
+            <Tab.Screen
+              name="Order"
+              options={{
+                tabBarIcon: ({ color }) => <Text style={[styles.tabIcon, { color }]}>🧾</Text>,
+              }}
+            >
+              {() => <CustomerStack onShopNameTap={handleShopNameTap} deviceToken={deviceToken} />}
+            </Tab.Screen>
+
+            {kitchenUnlocked && (
+              <Tab.Screen
+                name="Kitchen"
+                component={KitchenScreen}
+                options={{
+                  tabBarIcon: ({ color }) => <Text style={[styles.tabIcon, { color }]}>🍳</Text>,
+                }}
+              />
+            )}
+          </Tab.Navigator>
+
+            <PinModal
+              visible={showPin}
+              isUnlocked={kitchenUnlocked}
+              onSuccess={handlePinSuccess}
+              onDismiss={handlePinDismiss}
             />
-          )}
-        </Tab.Navigator>
-
-        <PinModal
-          visible={showPin}
-          isUnlocked={kitchenUnlocked}
-          onSuccess={handlePinSuccess}
-          onDismiss={handlePinDismiss}
-        />
-      </NavigationContainer>
-    </View>
-  );
-}
-
-// ── Root wraps everything in SafeAreaProvider ─────────────────
-export default function App() {
-  return (
-    <SafeAreaProvider>
-      <PriceProvider>
-        <OrderProvider>
-          <AppInner />
-        </OrderProvider>
-      </PriceProvider>
-    </SafeAreaProvider>
+          </NavigationContainer>
+        </View>
+      </OrderProvider>
+    </PriceProvider>
   );
 }
 
@@ -282,18 +264,18 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderRadius: 20,
     marginHorizontal: 12,
-    paddingBottom: 6,
-    paddingTop: 6,
-    height: 58,
+    marginBottom: 30,
+    paddingBottom: 8,
+    paddingTop: 8,
+    height: 65,
     width: '100%',
     maxWidth: 760,
     alignSelf: 'center',
     overflow: 'hidden',
-    position: 'absolute',
   },
-  tabBarItem:     { minHeight: 46, justifyContent: 'center' },
-  tabLabel:       { fontSize: 10, fontWeight: '700', letterSpacing: 0.5, marginTop: 1 },
-  tabIcon:        { fontSize: 20 },
+  tabBarItem: { minHeight: 56, justifyContent: 'center' },
+  tabLabel: { fontSize: 10, fontWeight: '700', letterSpacing: 0.5, marginTop: 2 },
+  tabIcon: { fontSize: 22 },
   overlay:        { flex: 1, backgroundColor: 'rgba(0,0,0,0.75)', justifyContent: 'center', alignItems: 'center' },
   modalCard:      { backgroundColor: COLORS.bgCard, borderRadius: 16, padding: 28, width: '82%', alignItems: 'center', gap: 12, borderWidth: 1, borderColor: COLORS.border },
   modalTitle:     { color: COLORS.yellow, fontSize: 16, fontWeight: '900', letterSpacing: 2 },
