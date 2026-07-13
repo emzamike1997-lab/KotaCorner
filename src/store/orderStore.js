@@ -1,5 +1,7 @@
 /**
  * src/store/orderStore.js
+ * Fetches all today's orders from Supabase on startup
+ * so kitchen sees orders from ALL devices in real time
  */
 import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
 import { supabase } from '../config/supabase';
@@ -28,11 +30,11 @@ async function sendPushNotification(token, title, body) {
 }
 
 export function OrderProvider({ children }) {
-  const [items, setItems]                 = useState({});
-  const [customerName, setCustomerName]   = useState('');
-  const [phoneNumber, setPhoneNumber]     = useState('');
-  const [note, setNote]                   = useState('');
-  const [lastOrder, setLastOrder]         = useState(null);
+  const [items, setItems] = useState({});
+  const [customerName, setCustomerName] = useState('');
+  const [phoneNumber, setPhoneNumber] = useState('');
+  const [note, setNote] = useState('');
+  const [lastOrder, setLastOrder] = useState(null);
   const [kitchenOrders, setKitchenOrders] = useState([]);
 
   const sortOrders = useCallback((orders) => {
@@ -46,10 +48,66 @@ export function OrderProvider({ children }) {
     });
   }, []);
 
-  // Realtime subscription
+  // ── Convert Supabase row to local order format ─────────────
+  const rowToOrder = (row) => ({
+    id: row.id,
+    orderNumber: row.order_number,
+    customerName: row.customer_name,
+    customerPhone: row.phone_number || '',
+    note: row.note || '',
+    items: row.items || [],
+    total: row.total,
+    status: row.status,
+    paymentStatus: row.status,
+    createdAt: new Date(row.created_at),
+    timeLabel: row.time_label || formatTime(new Date(row.created_at)),
+    deviceToken: row.device_token || null,
+    expiresAt: null,
+  });
+
+  // ── Fetch today's orders from Supabase on mount ────────────
+  useEffect(() => {
+    const fetchTodayOrders = async () => {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      const { data, error } = await supabase
+        .from('orders')
+        .select('*')
+        .gte('created_at', today.toISOString())
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.log('Fetch orders error:', error.message);
+        return;
+      }
+
+      if (data && data.length > 0) {
+        const orders = data.map(rowToOrder);
+        setKitchenOrders(sortOrders(orders));
+      }
+    };
+
+    fetchTodayOrders();
+  }, []);
+
+  // ── Realtime subscription for new/updated orders ───────────
   useEffect(() => {
     const channel = supabase
       .channel('orders-kitchen')
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'orders',
+      }, (payload) => {
+        const newOrder = rowToOrder(payload.new);
+        setKitchenOrders(prev => {
+          // Avoid duplicates
+          const exists = prev.find(o => o.id === newOrder.id);
+          if (exists) return prev;
+          return sortOrders([newOrder, ...prev]);
+        });
+      })
       .on('postgres_changes', {
         event: 'UPDATE',
         schema: 'public',
@@ -67,6 +125,7 @@ export function OrderProvider({ children }) {
         );
       })
       .subscribe();
+
     return () => supabase.removeChannel(channel);
   }, [sortOrders]);
 
@@ -80,9 +139,9 @@ export function OrderProvider({ children }) {
       return { ...prev, [id]: prev[id] - 1 };
     }), []);
 
-  const getQty       = useCallback((id) => items[id] || 0, [items]);
-  const getCount     = useCallback(() => Object.values(items).reduce((a, b) => a + b, 0), [items]);
-  const getTotal     = useCallback((menu) => menu.reduce((s, m) => s + (items[m.id] || 0) * m.price, 0), [items]);
+  const getQty = useCallback((id) => items[id] || 0, [items]);
+  const getCount = useCallback(() => Object.values(items).reduce((a, b) => a + b, 0), [items]);
+  const getTotal = useCallback((menu) => menu.reduce((s, m) => s + (items[m.id] || 0) * m.price, 0), [items]);
   const getCartItems = useCallback((menu) =>
     menu.filter(m => (items[m.id] || 0) > 0)
       .map(m => ({ ...m, qty: items[m.id], subtotal: items[m.id] * m.price })),
@@ -122,8 +181,6 @@ export function OrderProvider({ children }) {
       paymentStatus: 'awaiting_payment',
       createdAt: now,
       expiresAt,
-      paymentConfirmedAt: null,
-      expiredAt: null,
       timeLabel: formatTime(now),
       deviceToken: deviceToken || null,
     };
@@ -139,11 +196,10 @@ export function OrderProvider({ children }) {
       status: 'awaiting_payment',
       paymentStatus: 'awaiting_payment',
       expiresAt,
-      paymentConfirmedAt: null,
-      expiredAt: null,
       timeLabel: formatTime(now),
     };
 
+    // Set local state immediately
     setKitchenOrders(prev => sortOrders([kitchenOrder, ...prev]));
     setLastOrder(receipt);
     setItems({});
@@ -151,6 +207,7 @@ export function OrderProvider({ children }) {
     setPhoneNumber('');
     setNote('');
 
+    // Save to Supabase — realtime will push to kitchen on other devices
     supabase.from('orders').insert({
       id: orderId,
       order_number: num,
@@ -174,14 +231,9 @@ export function OrderProvider({ children }) {
     const currentOrder = kitchenOrders.find(o => o.id === orderId) || lastOrder;
     if (!currentOrder) return;
 
-    const updatedOrder = {
-      ...currentOrder,
-      status: 'paid',
-      paymentStatus: 'paid',
-      paymentConfirmedAt: new Date().toISOString(),
-    };
-
-    setKitchenOrders(prev => sortOrders(prev.map(o => o.id === orderId ? updatedOrder : o)));
+    setKitchenOrders(prev => sortOrders(prev.map(o =>
+      o.id === orderId ? { ...o, status: 'paid', paymentStatus: 'paid' } : o
+    )));
     setLastOrder(prev => prev && prev.id === orderId ? { ...prev, status: 'paid', paymentStatus: 'paid' } : prev);
 
     supabase.from('orders').update({ status: 'paid' }).eq('id', orderId).then(({ error }) => {
@@ -194,14 +246,9 @@ export function OrderProvider({ children }) {
     const currentOrder = kitchenOrders.find(o => o.id === orderId) || lastOrder;
     if (!currentOrder || currentOrder.status !== 'awaiting_payment') return;
 
-    const updatedOrder = {
-      ...currentOrder,
-      status: 'expired',
-      paymentStatus: 'expired',
-      expiredAt: new Date().toISOString(),
-    };
-
-    setKitchenOrders(prev => sortOrders(prev.map(o => o.id === orderId ? updatedOrder : o)));
+    setKitchenOrders(prev => sortOrders(prev.map(o =>
+      o.id === orderId ? { ...o, status: 'expired', paymentStatus: 'expired' } : o
+    )));
     setLastOrder(prev => prev && prev.id === orderId ? { ...prev, status: 'expired', paymentStatus: 'expired' } : prev);
 
     supabase.from('orders').update({ status: 'expired' }).eq('id', orderId).then(({ error }) => {
@@ -214,30 +261,25 @@ export function OrderProvider({ children }) {
     const currentOrder = kitchenOrders.find(o => o.id === orderId);
     if (!currentOrder) return;
 
-    const updatedOrder = {
-      ...currentOrder,
-      status: 'cancelled',
-      cancelledAt: new Date().toISOString(),
-    };
-
-    setKitchenOrders(prev => sortOrders(prev.map(o => o.id === orderId ? updatedOrder : o)));
+    setKitchenOrders(prev => sortOrders(prev.map(o =>
+      o.id === orderId ? { ...o, status: 'cancelled' } : o
+    )));
     setLastOrder(prev => prev && prev.id === orderId ? { ...prev, status: 'cancelled' } : prev);
 
     supabase.from('orders').update({ status: 'cancelled' }).eq('id', orderId).then(({ error }) => {
       if (error) console.log('Supabase update error:', error.message);
     });
 
-    // Notify customer their order was cancelled
     if (currentOrder.deviceToken) {
       sendPushNotification(
         currentOrder.deviceToken,
         '❌ Order Cancelled',
-        `Sorry, order ${currentOrder.orderNumber} has been cancelled. Please contact the shop for assistance.`
+        `Sorry, order ${currentOrder.orderNumber} has been cancelled.`
       );
     }
   }, [kitchenOrders, sortOrders]);
 
-  // ── Advance order status ───────────────────────────────────
+  // ── Advance order ──────────────────────────────────────────
   const advanceOrder = useCallback(async (orderId) => {
     const currentOrder = kitchenOrders.find(o => o.id === orderId);
     if (!currentOrder) return;
@@ -248,14 +290,14 @@ export function OrderProvider({ children }) {
     else if (currentOrder.status === 'making') nextStatus = 'ready';
     else if (currentOrder.status === 'ready') nextStatus = 'done';
 
-    const updatedOrder = { ...currentOrder, status: nextStatus };
-    setKitchenOrders(prev => sortOrders(prev.map(o => o.id === orderId ? updatedOrder : o)));
+    setKitchenOrders(prev => sortOrders(prev.map(o =>
+      o.id === orderId ? { ...o, status: nextStatus } : o
+    )));
 
     supabase.from('orders').update({ status: nextStatus }).eq('id', orderId).then(({ error }) => {
       if (error) console.log('Supabase update error:', error.message);
     });
 
-    // Send push notification based on new status
     if (currentOrder.deviceToken) {
       if (nextStatus === 'making') {
         sendPushNotification(
@@ -273,7 +315,7 @@ export function OrderProvider({ children }) {
     }
   }, [kitchenOrders, sortOrders]);
 
-  // ── Clear done/cancelled/expired orders ────────────────────
+  // ── Clear done/cancelled/expired ──────────────────────────
   const clearDoneOrders = useCallback(() => {
     setKitchenOrders(prev =>
       prev.filter(o => o.status !== 'done' && o.status !== 'expired' && o.status !== 'cancelled')
