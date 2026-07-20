@@ -6,6 +6,7 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
@@ -28,10 +29,11 @@ Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldShowAlert: true,
     shouldPlaySound: true,
-    shouldSetBadge: false,
+    shouldSetBadge: true,
   }),
 });
 
+// ── Register device for push notifications ────────────────────
 async function registerForPushNotifications() {
   if (!Device.isDevice) return null;
   const { status: existingStatus } = await Notifications.getPermissionsAsync();
@@ -41,9 +43,37 @@ async function registerForPushNotifications() {
     finalStatus = status;
   }
   if (finalStatus !== 'granted') return null;
-  const token = (await Notifications.getExpoPushTokenAsync()).data;
-  await supabase.from('device_tokens').upsert({ token }, { onConflict: 'token' });
-  return token;
+  try {
+    const token = (await Notifications.getExpoPushTokenAsync()).data;
+    // Save as customer token
+    await supabase.from('device_tokens').upsert({ token }, { onConflict: 'token' });
+    return token;
+  } catch (e) {
+    console.log('Push token error:', e);
+    return null;
+  }
+}
+
+// ── Save kitchen token to Supabase ────────────────────────────
+async function registerKitchenToken(deviceToken) {
+  if (!deviceToken) return;
+  try {
+    await supabase.from('kitchen_tokens').upsert({ token: deviceToken }, { onConflict: 'token' });
+    console.log('Kitchen token registered:', deviceToken);
+  } catch (e) {
+    console.log('Kitchen token error:', e);
+  }
+}
+
+// ── Remove kitchen token from Supabase ────────────────────────
+async function unregisterKitchenToken(deviceToken) {
+  if (!deviceToken) return;
+  try {
+    await supabase.from('kitchen_tokens').delete().eq('token', deviceToken);
+    console.log('Kitchen token removed');
+  } catch (e) {
+    console.log('Kitchen token remove error:', e);
+  }
 }
 
 function usePatternTap(onMatch) {
@@ -178,17 +208,28 @@ function CustomerStack({ onShopNameTap, deviceToken }) {
   );
 }
 
-export default function App() {
+function AppInner() {
+  const insets = useSafeAreaInsets();
   const [kitchenUnlocked, setKitchenUnlocked] = useState(false);
   const [showPin, setShowPin] = useState(false);
   const [deviceToken, setDeviceToken] = useState(null);
 
   useEffect(() => {
-    AsyncStorage.getItem(STORAGE_KEY).then((val) => {
-      if (val === 'true') setKitchenUnlocked(true);
-    });
-    registerForPushNotifications().then(token => {
-      if (token) setDeviceToken(token);
+    AsyncStorage.getItem(STORAGE_KEY).then(async (val) => {
+      if (val === 'true') {
+        setKitchenUnlocked(true);
+        // Re-register kitchen token on app start if kitchen was previously unlocked
+        const token = await registerForPushNotifications();
+        if (token) {
+          setDeviceToken(token);
+          await registerKitchenToken(token);
+        }
+      } else {
+        // Just register as customer
+        registerForPushNotifications().then(token => {
+          if (token) setDeviceToken(token);
+        });
+      }
     });
   }, []);
 
@@ -198,84 +239,101 @@ export default function App() {
   const handlePinSuccess = useCallback(async (action) => {
     setShowPin(false);
     if (action === 'hide') {
+      // Unregister kitchen token when hiding kitchen
+      await unregisterKitchenToken(deviceToken);
       setKitchenUnlocked(false);
       await AsyncStorage.setItem(STORAGE_KEY, 'false');
     } else {
+      // Register kitchen token when unlocking kitchen
+      await registerKitchenToken(deviceToken);
       setKitchenUnlocked(true);
       await AsyncStorage.setItem(STORAGE_KEY, 'true');
     }
-  }, []);
+  }, [deviceToken]);
 
   const handlePinDismiss = useCallback(() => setShowPin(false), []);
 
+  const tabBarStyle = {
+    ...styles.tabBar,
+    marginBottom: insets.bottom > 0 ? insets.bottom : 12,
+  };
+
   return (
-    <PriceProvider>
-      <OrderProvider>
-        <View style={styles.appShell}>
-          <NavigationContainer>
-            <Tab.Navigator
-              screenOptions={{
-                headerShown: false,
-                tabBarStyle: styles.tabBar,
-                tabBarActiveTintColor: COLORS.accent,
-                tabBarInactiveTintColor: COLORS.muted,
-                tabBarLabelStyle: styles.tabLabel,
-                tabBarItemStyle: styles.tabBarItem,
-              }}
-            >
+    <View style={styles.appShell}>
+      <NavigationContainer>
+        <Tab.Navigator
+          screenOptions={{
+            headerShown: false,
+            tabBarStyle,
+            tabBarActiveTintColor: COLORS.accent,
+            tabBarInactiveTintColor: COLORS.muted,
+            tabBarLabelStyle: styles.tabLabel,
+            tabBarItemStyle: styles.tabBarItem,
+          }}
+        >
+          <Tab.Screen
+            name="Order"
+            options={{
+              tabBarIcon: ({ color }) => <Text style={[styles.tabIcon, { color }]}>🧾</Text>,
+            }}
+          >
+            {() => <CustomerStack onShopNameTap={handleShopNameTap} deviceToken={deviceToken} />}
+          </Tab.Screen>
+
+          {kitchenUnlocked && (
             <Tab.Screen
-              name="Order"
+              name="Kitchen"
+              component={KitchenScreen}
               options={{
-                tabBarIcon: ({ color }) => <Text style={[styles.tabIcon, { color }]}>🧾</Text>,
+                tabBarIcon: ({ color }) => <Text style={[styles.tabIcon, { color }]}>🍳</Text>,
               }}
-            >
-              {() => <CustomerStack onShopNameTap={handleShopNameTap} deviceToken={deviceToken} />}
-            </Tab.Screen>
-
-            {kitchenUnlocked && (
-              <Tab.Screen
-                name="Kitchen"
-                component={KitchenScreen}
-                options={{
-                  tabBarIcon: ({ color }) => <Text style={[styles.tabIcon, { color }]}>🍳</Text>,
-                }}
-              />
-            )}
-          </Tab.Navigator>
-
-            <PinModal
-              visible={showPin}
-              isUnlocked={kitchenUnlocked}
-              onSuccess={handlePinSuccess}
-              onDismiss={handlePinDismiss}
             />
-          </NavigationContainer>
-        </View>
-      </OrderProvider>
-    </PriceProvider>
+          )}
+        </Tab.Navigator>
+
+        <PinModal
+          visible={showPin}
+          isUnlocked={kitchenUnlocked}
+          onSuccess={handlePinSuccess}
+          onDismiss={handlePinDismiss}
+        />
+      </NavigationContainer>
+    </View>
+  );
+}
+
+export default function App() {
+  return (
+    <SafeAreaProvider>
+      <PriceProvider>
+        <OrderProvider>
+          <AppInner />
+        </OrderProvider>
+      </PriceProvider>
+    </SafeAreaProvider>
   );
 }
 
 const styles = StyleSheet.create({
-  appShell: { flex: 1, backgroundColor: COLORS.bg },
+  appShell:       { flex: 1, backgroundColor: COLORS.bg },
   tabBar: {
     backgroundColor: COLORS.bgDeep,
     borderTopColor: COLORS.bgCard,
     borderTopWidth: 1,
     borderRadius: 20,
     marginHorizontal: 12,
-    marginBottom: 30,
-    paddingBottom: 8,
-    paddingTop: 8,
-    height: 65,
+    paddingBottom: 6,
+    paddingTop: 6,
+    height: 58,
     width: '100%',
     maxWidth: 760,
     alignSelf: 'center',
     overflow: 'hidden',
+    position: 'absolute',
   },
-  tabBarItem: { minHeight: 56, justifyContent: 'center' },
-  tabLabel: { fontSize: 10, fontWeight: '700', letterSpacing: 0.5, marginTop: 2 },
-  tabIcon: { fontSize: 22 },
+  tabBarItem:     { minHeight: 46, justifyContent: 'center' },
+  tabLabel:       { fontSize: 10, fontWeight: '700', letterSpacing: 0.5, marginTop: 1 },
+  tabIcon:        { fontSize: 20 },
   overlay:        { flex: 1, backgroundColor: 'rgba(0,0,0,0.75)', justifyContent: 'center', alignItems: 'center' },
   modalCard:      { backgroundColor: COLORS.bgCard, borderRadius: 16, padding: 28, width: '82%', alignItems: 'center', gap: 12, borderWidth: 1, borderColor: COLORS.border },
   modalTitle:     { color: COLORS.yellow, fontSize: 16, fontWeight: '900', letterSpacing: 2 },

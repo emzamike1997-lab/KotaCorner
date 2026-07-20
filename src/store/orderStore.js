@@ -1,7 +1,8 @@
 /**
  * src/store/orderStore.js
- * Fetches all today's orders from Supabase on startup
- * so kitchen sees orders from ALL devices in real time
+ * - Fetches today's orders from Supabase on startup
+ * - Notifies ALL kitchen devices when new order placed
+ * - Notifies customer when order status changes
  */
 import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
 import { supabase } from '../config/supabase';
@@ -29,12 +30,25 @@ async function sendPushNotification(token, title, body) {
   }
 }
 
+// Notify all kitchen devices
+async function notifyKitchen(title, body) {
+  try {
+    const { data, error } = await supabase.from('kitchen_tokens').select('token');
+    if (error || !data || data.length === 0) return;
+    for (const row of data) {
+      await sendPushNotification(row.token, title, body);
+    }
+  } catch (e) {
+    console.log('Kitchen notify error:', e);
+  }
+}
+
 export function OrderProvider({ children }) {
-  const [items, setItems] = useState({});
-  const [customerName, setCustomerName] = useState('');
-  const [phoneNumber, setPhoneNumber] = useState('');
-  const [note, setNote] = useState('');
-  const [lastOrder, setLastOrder] = useState(null);
+  const [items, setItems]                 = useState({});
+  const [customerName, setCustomerName]   = useState('');
+  const [phoneNumber, setPhoneNumber]     = useState('');
+  const [note, setNote]                   = useState('');
+  const [lastOrder, setLastOrder]         = useState(null);
   const [kitchenOrders, setKitchenOrders] = useState([]);
 
   const sortOrders = useCallback((orders) => {
@@ -48,7 +62,6 @@ export function OrderProvider({ children }) {
     });
   }, []);
 
-  // ── Convert Supabase row to local order format ─────────────
   const rowToOrder = (row) => ({
     id: row.id,
     orderNumber: row.order_number,
@@ -65,36 +78,29 @@ export function OrderProvider({ children }) {
     expiresAt: null,
   });
 
-  // ── Fetch today's orders from Supabase on mount ────────────
+  // ── Fetch today's orders on mount ──────────────────────────
   useEffect(() => {
     const fetchTodayOrders = async () => {
       const today = new Date();
       today.setHours(0, 0, 0, 0);
-
       const { data, error } = await supabase
         .from('orders')
         .select('*')
         .gte('created_at', today.toISOString())
         .order('created_at', { ascending: false });
 
-      if (error) {
-        console.log('Fetch orders error:', error.message);
-        return;
-      }
-
+      if (error) { console.log('Fetch orders error:', error.message); return; }
       if (data && data.length > 0) {
-        const orders = data.map(rowToOrder);
-        setKitchenOrders(sortOrders(orders));
+        setKitchenOrders(sortOrders(data.map(rowToOrder)));
       }
     };
-
     fetchTodayOrders();
   }, []);
 
-  // ── Realtime subscription for new/updated orders ───────────
+  // ── Realtime subscription ──────────────────────────────────
   useEffect(() => {
     const channel = supabase
-      .channel('orders-kitchen')
+      .channel('orders-realtime')
       .on('postgres_changes', {
         event: 'INSERT',
         schema: 'public',
@@ -102,7 +108,6 @@ export function OrderProvider({ children }) {
       }, (payload) => {
         const newOrder = rowToOrder(payload.new);
         setKitchenOrders(prev => {
-          // Avoid duplicates
           const exists = prev.find(o => o.id === newOrder.id);
           if (exists) return prev;
           return sortOrders([newOrder, ...prev]);
@@ -114,12 +119,9 @@ export function OrderProvider({ children }) {
         table: 'orders',
       }, (payload) => {
         const updated = payload.new;
-        setKitchenOrders(prev => {
-          const newOrders = prev.map(o =>
-            o.id === updated.id ? { ...o, status: updated.status } : o
-          );
-          return sortOrders(newOrders);
-        });
+        setKitchenOrders(prev =>
+          sortOrders(prev.map(o => o.id === updated.id ? { ...o, status: updated.status } : o))
+        );
         setLastOrder(prev =>
           prev && prev.id === updated.id ? { ...prev, status: updated.status } : prev
         );
@@ -139,9 +141,9 @@ export function OrderProvider({ children }) {
       return { ...prev, [id]: prev[id] - 1 };
     }), []);
 
-  const getQty = useCallback((id) => items[id] || 0, [items]);
-  const getCount = useCallback(() => Object.values(items).reduce((a, b) => a + b, 0), [items]);
-  const getTotal = useCallback((menu) => menu.reduce((s, m) => s + (items[m.id] || 0) * m.price, 0), [items]);
+  const getQty       = useCallback((id) => items[id] || 0, [items]);
+  const getCount     = useCallback(() => Object.values(items).reduce((a, b) => a + b, 0), [items]);
+  const getTotal     = useCallback((menu) => menu.reduce((s, m) => s + (items[m.id] || 0) * m.price, 0), [items]);
   const getCartItems = useCallback((menu) =>
     menu.filter(m => (items[m.id] || 0) > 0)
       .map(m => ({ ...m, qty: items[m.id], subtotal: items[m.id] * m.price })),
@@ -199,7 +201,6 @@ export function OrderProvider({ children }) {
       timeLabel: formatTime(now),
     };
 
-    // Set local state immediately
     setKitchenOrders(prev => sortOrders([kitchenOrder, ...prev]));
     setLastOrder(receipt);
     setItems({});
@@ -207,7 +208,7 @@ export function OrderProvider({ children }) {
     setPhoneNumber('');
     setNote('');
 
-    // Save to Supabase — realtime will push to kitchen on other devices
+    // Save to Supabase
     supabase.from('orders').insert({
       id: orderId,
       order_number: num,
@@ -222,6 +223,12 @@ export function OrderProvider({ children }) {
     }).then(({ error }) => {
       if (error) console.log('Supabase insert error:', error.message);
     });
+
+    // Notify ALL kitchen devices about new order
+    notifyKitchen(
+      '🔥 New Order!',
+      `Order ${num} from ${name} — R${total}. ${orderNote ? `Note: ${orderNote}` : ''}`
+    );
 
     return num;
   }, [items, customerName, phoneNumber, note, sortOrders]);
@@ -239,6 +246,12 @@ export function OrderProvider({ children }) {
     supabase.from('orders').update({ status: 'paid' }).eq('id', orderId).then(({ error }) => {
       if (error) console.log('Supabase update error:', error.message);
     });
+
+    // Notify kitchen payment confirmed
+    notifyKitchen(
+      '💳 Payment Confirmed',
+      `Order ${currentOrder.orderNumber} from ${currentOrder.customerName} has been paid — R${currentOrder.total}`
+    );
   }, [kitchenOrders, lastOrder, sortOrders]);
 
   // ── Expire order ───────────────────────────────────────────
@@ -270,6 +283,7 @@ export function OrderProvider({ children }) {
       if (error) console.log('Supabase update error:', error.message);
     });
 
+    // Notify customer
     if (currentOrder.deviceToken) {
       sendPushNotification(
         currentOrder.deviceToken,
@@ -298,6 +312,7 @@ export function OrderProvider({ children }) {
       if (error) console.log('Supabase update error:', error.message);
     });
 
+    // Notify customer
     if (currentOrder.deviceToken) {
       if (nextStatus === 'making') {
         sendPushNotification(
@@ -315,7 +330,7 @@ export function OrderProvider({ children }) {
     }
   }, [kitchenOrders, sortOrders]);
 
-  // ── Clear done/cancelled/expired ──────────────────────────
+  // ── Clear done orders ──────────────────────────────────────
   const clearDoneOrders = useCallback(() => {
     setKitchenOrders(prev =>
       prev.filter(o => o.status !== 'done' && o.status !== 'expired' && o.status !== 'cancelled')
